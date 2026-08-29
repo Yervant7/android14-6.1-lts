@@ -35,14 +35,26 @@ jobs:
       - name: Download Clang from Repo Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           CLANG_TAG=$(gh release list --limit 10 | awk '{print $1}' | grep -E '^clang-r' | head -n 1)
+
           if [ -z "$CLANG_TAG" ]; then
             CLANG_TAG="clang-r547379"
           fi
+
           echo "CLANG_VERSION=$CLANG_TAG" >> $GITHUB_ENV
           mkdir -p "$CLANG_TAG"
-          gh release download "$CLANG_TAG" -p "${CLANG_TAG}.tar.gz"
+
+          if gh release view "$CLANG_TAG" >/dev/null 2>&1; then
+            echo "Downloading $CLANG_TAG directly from GitHub Releases..."
+            gh release download "$CLANG_TAG" -p "${CLANG_TAG}.tar.gz"
+          else
+            echo "Warning: Release $CLANG_TAG not found in repository."
+            echo "Downloading from Google Git as fallback..."
+            curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_TAG}.tar.gz" -o "${CLANG_TAG}.tar.gz"
+          fi
+
           tar -xzf "${CLANG_TAG}.tar.gz" -C "$CLANG_TAG"
           rm -f "${CLANG_TAG}.tar.gz"
 
@@ -136,7 +148,7 @@ jobs:
           export LLVM=1
           export LLVM_IAS=1
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export PATH="$GITHUB_WORKSPACE/clang-r547379/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/${{ env.CLANG_VERSION }}/bin:$PATH"
           
           touch .scmversion
           mkdir -p out
