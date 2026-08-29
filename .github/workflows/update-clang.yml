@@ -1,0 +1,53 @@
+name: Sync Latest AOSP Clang
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Runs every Monday at 04:00 UTC.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Detect Latest AOSP Clang Revision
+        id: detect
+        run: |
+          LATEST_CLANG=$(curl -s "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/main" | grep -o 'clang-r[0-9]\+' | sort -V | tail -n 1)
+          echo "latest=$LATEST_CLANG" >> $GITHUB_OUTPUT
+          echo "Latest AOSP Clang version detected: $LATEST_CLANG"
+
+      - name: Check Existing Release
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CLANG_TAG="${{ steps.detect.outputs.latest }}"
+          if gh release view "$CLANG_TAG" >/dev/null 2>&1; then
+            echo "already_exists=true" >> $GITHUB_OUTPUT
+            echo "Version $CLANG_TAG already exists in Releases. Nothing to do."
+          else
+            echo "already_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Clang from Google Git
+        if: steps.check_release.outputs.already_exists == 'false'
+        run: |
+          CLANG_TAG="${{ steps.detect.outputs.latest }}"
+          echo "Downloading $CLANG_TAG from Google..."
+          curl -LSs "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_TAG}.tar.gz" -o "${CLANG_TAG}.tar.gz"
+
+      - name: Publish Clang Release
+        if: steps.check_release.outputs.already_exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CLANG_TAG="${{ steps.detect.outputs.latest }}"
+          gh release create "$CLANG_TAG" "${CLANG_TAG}.tar.gz" \
+            --title "AOSP Clang $CLANG_TAG" \
+            --notes "Clang pre-compiled package ($CLANG_TAG) automatically synchronized from AOSP prebuilts."

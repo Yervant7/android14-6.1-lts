@@ -1,0 +1,220 @@
+name: Build GKI Kernel Android 14 6.1 LTS
+
+on:
+  workflow_dispatch:
+    inputs:
+      OPT_KSU:
+        description: "Build with KernelSU"
+        type: choice
+        default: "susfs4ksu"
+        options:
+          - "false"
+          - "true"
+          - "susfs4ksu"
+
+      OPT_NOMOUNT:
+        description: "Enable NoMount support"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build GKI Kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ccache bc bison flex libssl-dev libelf-dev \
+            dwarves cpio git python3 pahole libdw-dev xz-utils curl tar gzip
+
+      - name: Download Clang from Repo Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CLANG_TAG=$(gh release list --limit 10 | awk '{print $1}' | grep -E '^clang-r' | head -n 1)
+          if [ -z "$CLANG_TAG" ]; then
+            CLANG_TAG="clang-r547379"
+          fi
+          echo "CLANG_VERSION=$CLANG_TAG" >> $GITHUB_ENV
+          mkdir -p "$CLANG_TAG"
+          gh release download "$CLANG_TAG" -p "${CLANG_TAG}.tar.gz"
+          tar -xzf "${CLANG_TAG}.tar.gz" -C "$CLANG_TAG"
+          rm -f "${CLANG_TAG}.tar.gz"
+
+      - name: Git Clone Kernel GKI (android14-6.1-lts)
+        run: |
+          mkdir -p android-kernel
+          cd android-kernel
+          git clone https://android.googlesource.com/kernel/common -b android14-6.1-lts --depth=1 common
+
+      - name: Integrate Baseband-guard
+        working-directory: android-kernel/common
+        run: |
+          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+
+      - name: Integrate KernelSU (Main Branch)
+        if: ${{ github.event.inputs.OPT_KSU != 'false' }}
+        working-directory: android-kernel/common
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+
+      - name: Integrate SUSFS4KSU
+        if: ${{ github.event.inputs.OPT_KSU == 'susfs4ksu' }}
+        working-directory: android-kernel
+        run: |
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1
+          cd common
+          cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
+          SUSFS_PATCH=$(ls ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel*.patch | head -n 1)
+          cp "$SUSFS_PATCH" .
+          PATCH_NAME=$(basename "$SUSFS_PATCH")
+          
+          cp ../susfs4ksu/kernel_patches/fs/* fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/* include/linux/
+          
+          cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch
+          cd ..
+          patch -p1 < "$PATCH_NAME" || echo "⚠️ Some SUSFS patches may have flaws due to the 'main' branch of KernelSU."
+
+      - name: Integrate NoMount
+        if: ${{ github.event.inputs.OPT_NOMOUNT == 'true' || github.event.inputs.OPT_NOMOUNT == true }}
+        working-directory: android-kernel/common
+        run: |
+          curl -LSs https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s master
+
+      - name: Set Custom Configs
+        working-directory: android-kernel/common
+        run: |
+          # Baseband-guard (Always active)
+          echo "CONFIG_BBG=y" >> arch/arm64/configs/gki_defconfig
+
+          # NoMount (Conditional)
+          if [ "${{ github.event.inputs.OPT_NOMOUNT }}" = "true" ]; then
+            echo "CONFIG_NOMOUNT=y" >> arch/arm64/configs/gki_defconfig
+          fi
+
+          # KernelSU (Conditional)
+          if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ]; then
+            echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
+          fi
+
+          # SUSFS (Conditional)
+          if [ "${{ github.event.inputs.OPT_KSU }}" = "susfs4ksu" ]; then
+            echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=n" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/gki_defconfig
+          fi
+
+      - name: Remove Protected Exports (Fix ABI Checks)
+        working-directory: android-kernel/common
+        run: |
+          rm -f android/abi_gki_protected_exports_aarch64
+          rm -f android/abi_gki_protected_exports_x86_64
+
+      - name: Build Kernel
+        working-directory: android-kernel/common
+        run: |
+          git config --global user.email "builder@android.com"
+          git config --global user.name "Android Builder"
+          export KBUILD_BUILD_USER="Yervant"
+          export KBUILD_BUILD_HOST="Ubuntu"
+          export KBUILD_BUILD_TIMESTAMP="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export PATH="$GITHUB_WORKSPACE/clang-r547379/bin:$PATH"
+          
+          touch .scmversion
+          mkdir -p out
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+          make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 KCFLAGS="-Wno-error" Image
+
+      - name: Package Kernel Artifacts
+        run: |
+          BUILD_DATE=$(date +'%Y%m%d_%H%M%S')
+          TAG="GKI-6.1-${BUILD_DATE}"
+          echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
+          
+          cd android-kernel/common/out/arch/arm64/boot
+          gzip -c Image > Image.gz
+
+      - name: Generate Changelog
+        run: |
+          fetch_log() {
+            local label="$1"
+            local repo_url="$2"
+            local branch="$3"
+            local status="$4"
+            
+            echo "### $label" >> changelog.md
+            if [ "$status" = "disabled" ]; then
+              echo "_Module disabled in this build._" >> changelog.md
+              echo "" >> changelog.md
+              return
+            fi
+
+            local temp_dir=$(mktemp -d)
+            if git clone --depth=5 --single-branch -b "$branch" "$repo_url" "$temp_dir" 2>/dev/null || git clone --depth=5 "$repo_url" "$temp_dir" 2>/dev/null; then
+              git -C "$temp_dir" log -5 --pretty=format:"* \`%h\` - %s (%ad)" --date=short >> changelog.md
+            else
+              echo "* Failed to get commit history." >> changelog.md
+            fi
+            echo -e "\n" >> changelog.md
+            rm -rf "$temp_dir"
+          }
+
+          echo "## 🚀 Build Details" > changelog.md
+          echo "- **GKI Base:** Android 14 6.1 LTS" >> changelog.md
+          echo "- **KernelSU Mode:** \`${{ github.event.inputs.OPT_KSU }}\`" >> changelog.md
+          echo "- **NoMount:** \`${{ github.event.inputs.OPT_NOMOUNT }}\`" >> changelog.md
+          echo "" >> changelog.md
+          echo "## 📋 Changelog of the Modules (Last 5 Changes)" >> changelog.md
+          echo "" >> changelog.md
+
+          # Baseband-guard
+          fetch_log "🛡️ Baseband-guard" "https://github.com/vc-teahouse/Baseband-guard.git" "main" "enabled"
+
+          # KernelSU
+          if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ]; then
+            fetch_log "⚡ KernelSU" "https://github.com/tiann/KernelSU.git" "main" "enabled"
+          else
+            fetch_log "⚡ KernelSU" "https://github.com/tiann/KernelSU.git" "main" "disabled"
+          fi
+
+          # SUSFS4KSU
+          if [ "${{ github.event.inputs.OPT_KSU }}" = "susfs4ksu" ]; then
+            fetch_log "🥷 SUSFS4KSU" "https://gitlab.com/simonpunk/susfs4ksu.git" "gki-android14-6.1" "enabled"
+          else
+            fetch_log "🥷 SUSFS4KSU" "https://gitlab.com/simonpunk/susfs4ksu.git" "gki-android14-6.1" "disabled"
+          fi
+
+          # NoMount
+          if [ "${{ github.event.inputs.OPT_NOMOUNT }}" = "true" ] || [ "${{ github.event.inputs.OPT_NOMOUNT }}" = true ]; then
+            fetch_log "📦 NoMount" "https://github.com/maxsteeel/nomount.git" "dev" "enabled"
+          else
+            fetch_log "📦 NoMount" "https://github.com/maxsteeel/nomount.git" "dev" "disabled"
+          fi
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ env.RELEASE_TAG }}" \
+            android-kernel/common/out/arch/arm64/boot/Image \
+            android-kernel/common/out/arch/arm64/boot/Image.gz \
+            --title "GKI Kernel 6.1 (${{ env.RELEASE_TAG }})" \
+            --notes-file changelog.md
