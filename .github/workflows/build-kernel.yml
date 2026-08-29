@@ -150,6 +150,7 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export PATH="$GITHUB_WORKSPACE/${{ env.CLANG_VERSION }}/bin:$PATH"
           
+          sed -i -z 's/[ \t]*#ifdef USE_PKCS11_ENGINE\n[ \t]*static const char \*key_pass;\n[ \t]*#endif/static const char *key_pass;/g' certs/extract-cert.c
           touch .scmversion
           mkdir -p out
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
