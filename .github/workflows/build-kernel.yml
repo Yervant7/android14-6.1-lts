@@ -82,7 +82,7 @@ jobs:
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1
           cd common
           cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
-          SUSFS_PATCH=$(ls ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel*.patch | head -n 1)
+          SUSFS_PATCH=$(ls ../susfs4ksu/kernel_patches/50_add_susfs_*.patch | head -n 1)
           cp "$SUSFS_PATCH" .
           PATCH_NAME=$(basename "$SUSFS_PATCH")
           
