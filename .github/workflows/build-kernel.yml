@@ -151,6 +151,8 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/${{ env.CLANG_VERSION }}/bin:$PATH"
           
           sed -i -z 's/[ \t]*#ifdef USE_PKCS11_ENGINE\n[ \t]*static const char \*key_pass;\n[ \t]*#endif/static const char *key_pass;/g' certs/extract-cert.c
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' "security/Kconfig"
+          sed -i -z 's|#include <linux/mnt_idmapping.h>[[:space:]]*#include "pnode.h"|#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"|g' fs/namespace.c
           touch .scmversion
           mkdir -p out
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
