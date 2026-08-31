@@ -12,11 +12,6 @@ on:
           - "true"
           - "susfs4ksu"
 
-      OPT_NOMOUNT:
-        description: "Enable NoMount support"
-        type: boolean
-        default: true
-
 permissions:
   contents: write
 
@@ -93,22 +88,11 @@ jobs:
           cd ..
           patch -p1 < "$PATCH_NAME" || echo "⚠️ Some SUSFS patches may have flaws due to the 'main' branch of KernelSU."
 
-      - name: Integrate NoMount
-        if: ${{ github.event.inputs.OPT_NOMOUNT == 'true' || github.event.inputs.OPT_NOMOUNT == true }}
-        working-directory: android-kernel/common
-        run: |
-          curl -LSs https://raw.githubusercontent.com/maxsteeel/nomount/refs/heads/dev/kernel/setup.sh | bash -s master
-
       - name: Set Custom Configs
         working-directory: android-kernel/common
         run: |
           # Baseband-guard (Always active)
           echo "CONFIG_BBG=y" >> arch/arm64/configs/gki_defconfig
-
-          # NoMount (Conditional)
-          if [ "${{ github.event.inputs.OPT_NOMOUNT }}" = "true" ]; then
-            echo "CONFIG_NOMOUNT=y" >> arch/arm64/configs/gki_defconfig
-          fi
 
           # KernelSU (Conditional)
           if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ]; then
@@ -215,13 +199,6 @@ jobs:
             fetch_log "🥷 SUSFS4KSU" "https://gitlab.com/simonpunk/susfs4ksu.git" "gki-android14-6.1" "enabled"
           else
             fetch_log "🥷 SUSFS4KSU" "https://gitlab.com/simonpunk/susfs4ksu.git" "gki-android14-6.1" "disabled"
-          fi
-
-          # NoMount
-          if [ "${{ github.event.inputs.OPT_NOMOUNT }}" = "true" ] || [ "${{ github.event.inputs.OPT_NOMOUNT }}" = true ]; then
-            fetch_log "📦 NoMount" "https://github.com/maxsteeel/nomount.git" "dev" "enabled"
-          else
-            fetch_log "📦 NoMount" "https://github.com/maxsteeel/nomount.git" "dev" "disabled"
           fi
 
       - name: Publish GitHub Release
