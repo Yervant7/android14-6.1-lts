@@ -179,7 +179,6 @@ jobs:
           echo "## 🚀 Build Details" > changelog.md
           echo "- **GKI Base:** Android 14 6.1 LTS" >> changelog.md
           echo "- **KernelSU Mode:** \`${{ github.event.inputs.OPT_KSU }}\`" >> changelog.md
-          echo "- **NoMount:** \`${{ github.event.inputs.OPT_NOMOUNT }}\`" >> changelog.md
           echo "" >> changelog.md
           echo "## 📋 Changelog of the Modules (Last 5 Changes)" >> changelog.md
           echo "" >> changelog.md
