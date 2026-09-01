@@ -21,11 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
       - name: Setup Build Environment
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential ccache bc bison flex libssl-dev libelf-dev \
-            dwarves cpio git python3 pahole libdw-dev xz-utils curl tar gzip
+            dwarves cpio git python3 pahole libdw-dev xz-utils curl tar gzip zip
 
       - name: Download Clang from Repo Release
         env:
@@ -57,7 +60,7 @@ jobs:
         run: |
           mkdir -p android-kernel
           cd android-kernel
-          git clone https://android.googlesource.com/kernel/common -b android14-6.1-lts --depth=1 common
+          git clone https://android.googlesource.com/kernel/common -b android14-6.1-lts --depth=5 common
 
       - name: Integrate Baseband-guard
         working-directory: android-kernel/common
@@ -146,10 +149,16 @@ jobs:
         run: |
           BUILD_DATE=$(date +'%Y%m%d_%H%M%S')
           TAG="GKI-6.1-${BUILD_DATE}"
+          ZIP_NAME="AnyKernel3-a14-6.1-${BUILD_DATE}.zip"
           echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
-          
-          cd android-kernel/common/out/arch/arm64/boot
-          gzip -c Image > Image.gz
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+          # Copy compiled Image to AnyKernel3-a14-6.1 folder
+          cp android-kernel/common/out/arch/arm64/boot/Image AnyKernel3-a14-6.1/Image
+
+          # Create AnyKernel3 flashable zip
+          cd AnyKernel3-a14-6.1
+          zip -r9 "../$ZIP_NAME" * -x "*.git*"
 
       - name: Generate Changelog
         run: |
@@ -180,8 +189,18 @@ jobs:
           echo "- **GKI Base:** Android 14 6.1 LTS" >> changelog.md
           echo "- **KernelSU Mode:** \`${{ github.event.inputs.OPT_KSU }}\`" >> changelog.md
           echo "" >> changelog.md
-          echo "## 📋 Changelog of the Modules (Last 5 Changes)" >> changelog.md
+          echo "## 📋 Changelog (Last 5 Commits)" >> changelog.md
           echo "" >> changelog.md
+
+          # Compiled Kernel Commits
+          echo "### 🐧 Kernel (android14-6.1-lts)" >> changelog.md
+          if [ -d "android-kernel/common/.git" ]; then
+            git -C android-kernel/common log -5 --pretty=format:"* \`%h\` - %s (%ad)" --date=short >> changelog.md
+            echo -e "\n" >> changelog.md
+          else
+            echo "* Failed to get kernel commit history." >> changelog.md
+            echo -e "\n" >> changelog.md
+          fi
 
           # Baseband-guard
           fetch_log "🛡️ Baseband-guard" "https://github.com/vc-teahouse/Baseband-guard.git" "main" "enabled"
@@ -206,7 +225,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release create "${{ env.RELEASE_TAG }}" \
+            "${{ env.ZIP_NAME }}" \
             android-kernel/common/out/arch/arm64/boot/Image \
-            android-kernel/common/out/arch/arm64/boot/Image.gz \
             --title "GKI Kernel 6.1 (${{ env.RELEASE_TAG }})" \
             --notes-file changelog.md
