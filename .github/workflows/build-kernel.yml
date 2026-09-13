@@ -30,7 +30,26 @@ jobs:
           sudo apt-get install -y build-essential ccache bc bison flex libssl-dev libelf-dev \
             dwarves cpio git python3 pahole libdw-dev xz-utils curl tar gzip zip
 
-      - name: Download Clang from Repo Release
+      - name: Setup CCache Environment
+        run: |
+          mkdir -p ~/.cache/ccache
+          echo "CCACHE_DIR=$HOME/.cache/ccache" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_SLOPPINESS=time_macros,include_file_mtime,file_macro" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=1" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=8G" >> $GITHUB_ENV
+
+      - name: Cache CCache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-ccache-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-
+
+      - name: Resolve Clang Version
+        id: clang-info
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -41,7 +60,23 @@ jobs:
             CLANG_TAG="clang-r547379"
           fi
 
+          echo "tag=$CLANG_TAG" >> $GITHUB_OUTPUT
           echo "CLANG_VERSION=$CLANG_TAG" >> $GITHUB_ENV
+
+      - name: Cache Clang Toolchain
+        id: cache-clang
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.clang-info.outputs.tag }}
+          key: ${{ runner.os }}-clang-${{ steps.clang-info.outputs.tag }}
+
+      - name: Download & Extract Clang
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CLANG_TAG: ${{ steps.clang-info.outputs.tag }}
+        run: |
           mkdir -p "$CLANG_TAG"
 
           if gh release view "$CLANG_TAG" >/dev/null 2>&1; then
@@ -59,173 +94,121 @@ jobs:
       - name: Git Clone Kernel GKI (android14-6.1-lts)
         run: |
           mkdir -p android-kernel
-          cd android-kernel
-          git clone https://android.googlesource.com/kernel/common -b android14-6.1-lts --depth=5 common
+          git clone https://android.googlesource.com/kernel/common -b android14-6.1-lts --depth=10 android-kernel/common
 
-      - name: Integrate Baseband-guard
-        working-directory: android-kernel/common
-        run: |
-          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
-
-      - name: Integrate KernelSU (Main Branch)
+      - name: Integrate KernelSU
         if: ${{ github.event.inputs.OPT_KSU != 'false' }}
         working-directory: android-kernel/common
-        run: |
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+        run: curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
 
       - name: Integrate SUSFS4KSU
         if: ${{ github.event.inputs.OPT_KSU == 'susfs4ksu' }}
         working-directory: android-kernel
         run: |
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1
+          set -e
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 --depth=10 susfs4ksu
           cd common
           cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
-          SUSFS_PATCH=$(ls ../susfs4ksu/kernel_patches/50_add_susfs_*.patch | head -n 1)
-          cp "$SUSFS_PATCH" .
-          PATCH_NAME=$(basename "$SUSFS_PATCH")
+          cp ../susfs4ksu/kernel_patches/50_add_susfs_*.patch .
           
-          cp ../susfs4ksu/kernel_patches/fs/* fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* include/linux/
+          cp -r ../susfs4ksu/kernel_patches/fs/* fs/
+          cp -r ../susfs4ksu/kernel_patches/include/linux/* include/linux/
           
-          cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch
-          cd ..
-          patch -p1 < "$PATCH_NAME" || echo "⚠️ Some SUSFS patches may have flaws due to the 'main' branch of KernelSU."
+          cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
+          patch -p1 < 50_add_susfs_*.patch || echo "⚠️ Warning: SUSFS patch conflicts."
 
       - name: Set Custom Configs
         working-directory: android-kernel/common
         run: |
-          # Baseband-guard (Always active)
-          echo "CONFIG_BBG=y" >> arch/arm64/configs/gki_defconfig
-
-          # KernelSU (Conditional)
-          if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ]; then
-            echo "CONFIG_KSU=y" >> arch/arm64/configs/gki_defconfig
-          fi
-
-          # SUSFS (Conditional)
-          if [ "${{ github.event.inputs.OPT_KSU }}" = "susfs4ksu" ]; then
-            echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=n" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> arch/arm64/configs/gki_defconfig
-          fi
-
-      - name: Remove Protected Exports (Fix ABI Checks)
-        working-directory: android-kernel/common
-        run: |
-          rm -f android/abi_gki_protected_exports_aarch64
-          rm -f android/abi_gki_protected_exports_x86_64
+          {
+            if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ]; then
+              echo "CONFIG_KSU=y"
+            fi
+            if [ "${{ github.event.inputs.OPT_KSU }}" = "susfs4ksu" ]; then
+              echo "CONFIG_KSU_SUSFS=y"
+              echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+              echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
+              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=n"
+              echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+              echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
+            fi
+          } >> arch/arm64/configs/gki_defconfig
 
       - name: Build Kernel
         working-directory: android-kernel/common
         run: |
-          git config --global user.email "builder@android.com"
-          git config --global user.name "Android Builder"
+          rm -f android/abi_gki_protected_exports_aarch64
+          rm -f android/abi_gki_protected_exports_x86_64
+          
           export KBUILD_BUILD_USER="Yervant"
           export KBUILD_BUILD_HOST="Ubuntu"
-          export KBUILD_BUILD_TIMESTAMP="$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          export KBUILD_BUILD_TIMESTAMP="1970-01-01 00:00:00 UTC"
           export ARCH=arm64
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
           export CROSS_COMPILE=aarch64-linux-gnu-
           export PATH="$GITHUB_WORKSPACE/${{ env.CLANG_VERSION }}/bin:$PATH"
-          
-          sed -i -z 's/[ \t]*#ifdef USE_PKCS11_ENGINE\n[ \t]*static const char \*key_pass;\n[ \t]*#endif/static const char *key_pass;/g' certs/extract-cert.c
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' "security/Kconfig"
-          sed -i -z 's|#include <linux/mnt_idmapping.h>[[:space:]]*#include "pnode.h"[[:space:]]*#include "internal.h"|#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT|g' fs/namespace.c
+
+          # Reset zero-counters to display the actual hit rate of this job
+          ccache -z
+
           touch .scmversion
-          mkdir -p out
-          make O=out ARCH=arm64 LLVM=1 gki_defconfig
-          make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 KCFLAGS="-Wno-error" Image
+          make O=out ARCH=arm64 LLVM=1 CC="ccache clang" gki_defconfig
+          make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 CC="ccache clang" KCFLAGS="-Wno-error" Image
+          
+          echo "=== CCache Statistics ==="
+          ccache -s
 
       - name: Package Kernel Artifacts
         run: |
+          set -e
           BUILD_DATE=$(date +'%Y%m%d_%H%M%S')
           TAG="GKI-6.1-${BUILD_DATE}"
           ZIP_NAME="AnyKernel3-a14-6.1-${BUILD_DATE}.zip"
           echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-          # Copy compiled Image to AnyKernel3-a14-6.1 folder
-          cp android-kernel/common/out/arch/arm64/boot/Image AnyKernel3-a14-6.1/Image
-
-          # Create AnyKernel3 flashable zip
+          cp android-kernel/common/out/arch/arm64/boot/Image AnyKernel3-a14-6.1/
           cd AnyKernel3-a14-6.1
           zip -r9 "../$ZIP_NAME" * -x "*.git*"
 
-      - name: Generate Changelog
-        run: |
-          fetch_log() {
-            local label="$1"
-            local repo_url="$2"
-            local branch="$3"
-            local status="$4"
-            
-            echo "### $label" >> changelog.md
-            if [ "$status" = "disabled" ]; then
-              echo "_Module disabled in this build._" >> changelog.md
-              echo "" >> changelog.md
-              return
-            fi
-
-            local temp_dir=$(mktemp -d)
-            if git clone --depth=5 --single-branch -b "$branch" "$repo_url" "$temp_dir" 2>/dev/null || git clone --depth=5 "$repo_url" "$temp_dir" 2>/dev/null; then
-              git -C "$temp_dir" log -5 --pretty=format:"* \`%h\` - %s (%ad)" --date=short >> changelog.md
-            else
-              echo "* Failed to get commit history." >> changelog.md
-            fi
-            echo -e "\n" >> changelog.md
-            rm -rf "$temp_dir"
-          }
-
-          echo "## 🚀 Build Details" > changelog.md
-          echo "- **GKI Base:** Android 14 6.1 LTS" >> changelog.md
-          echo "- **KernelSU Mode:** \`${{ github.event.inputs.OPT_KSU }}\`" >> changelog.md
-          echo "" >> changelog.md
-          echo "## 📋 Changelog (Last 5 Commits)" >> changelog.md
-          echo "" >> changelog.md
-
-          # Compiled Kernel Commits
-          echo "### 🐧 Kernel (android14-6.1-lts)" >> changelog.md
-          if [ -d "android-kernel/common/.git" ]; then
-            git -C android-kernel/common log -5 --pretty=format:"* \`%h\` - %s (%ad)" --date=short >> changelog.md
-            echo -e "\n" >> changelog.md
-          else
-            echo "* Failed to get kernel commit history." >> changelog.md
-            echo -e "\n" >> changelog.md
-          fi
-
-          # Baseband-guard
-          fetch_log "🛡️ Baseband-guard" "https://github.com/vc-teahouse/Baseband-guard.git" "main" "enabled"
-
-          # KernelSU
-          if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ]; then
-            fetch_log "⚡ KernelSU" "https://github.com/tiann/KernelSU.git" "main" "enabled"
-          else
-            fetch_log "⚡ KernelSU" "https://github.com/tiann/KernelSU.git" "main" "disabled"
-          fi
-
-          # SUSFS4KSU
-          if [ "${{ github.event.inputs.OPT_KSU }}" = "susfs4ksu" ]; then
-            fetch_log "🥷 SUSFS4KSU" "https://gitlab.com/simonpunk/susfs4ksu.git" "gki-android14-6.1" "enabled"
-          else
-            fetch_log "🥷 SUSFS4KSU" "https://gitlab.com/simonpunk/susfs4ksu.git" "gki-android14-6.1" "disabled"
-          fi
-
-      - name: Publish GitHub Release
+      - name: Generate Changelog & Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          {
+            echo "## 🚀 Build Details"
+            echo "- **GKI Base:** Android 14 6.1 LTS"
+            echo "- **KernelSU Mode:** \`${{ github.event.inputs.OPT_KSU }}\`"
+            echo "- **Clang Version:** \`${{ env.CLANG_VERSION }}\`"
+            echo ""
+            
+            echo "### 🐧 Kernel GKI (common) - Last 5 Commits"
+            git -C android-kernel/common log -n 5 --pretty=format:"- [%h](https://android.googlesource.com/kernel/common/+/%H) %s *(%as)*"
+            echo -e "\n"
+
+            if [ "${{ github.event.inputs.OPT_KSU }}" != "false" ] && [ -d "android-kernel/common/KernelSU/.git" ]; then
+              echo "### 🛡️ KernelSU - Last 5 Commits"
+              git -C android-kernel/common/KernelSU log -n 5 --pretty=format:"- [%h](https://github.com/tiann/KernelSU/commit/%H) %s *(%as)*"
+              echo -e "\n"
+            fi
+
+            if [ "${{ github.event.inputs.OPT_KSU }}" = "susfs4ksu" ] && [ -d "android-kernel/susfs4ksu/.git" ]; then
+              echo "### 🎭 SUSFS4KSU - Last 5 Commits"
+              git -C android-kernel/susfs4ksu log -n 5 --pretty=format:"- [%h](https://gitlab.com/simonpunk/susfs4ksu/-/commit/%H) %s *(%as)*"
+              echo -e "\n"
+            fi
+          } > changelog.md
+
           gh release create "${{ env.RELEASE_TAG }}" \
             "${{ env.ZIP_NAME }}" \
             android-kernel/common/out/arch/arm64/boot/Image \
             --title "GKI Kernel 6.1 (${{ env.RELEASE_TAG }})" \
             --notes-file changelog.md
+            
