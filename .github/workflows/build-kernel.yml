@@ -106,7 +106,7 @@ jobs:
         working-directory: android-kernel
         run: |
           set -e
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 --depth=10 susfs4ksu
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1-dev --depth=10 susfs4ksu
           cd common
           cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_*.patch .
