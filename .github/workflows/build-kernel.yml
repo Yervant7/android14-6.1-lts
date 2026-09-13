@@ -106,7 +106,7 @@ jobs:
         working-directory: android-kernel
         run: |
           set -e
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1-dev --depth=10 susfs4ksu
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 --depth=10 susfs4ksu
           cd common
           cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_*.patch .
@@ -159,6 +159,7 @@ jobs:
 
           sed -i -z 's/[ \t]*#ifdef USE_PKCS11_ENGINE\n[ \t]*static const char \*key_pass;\n[ \t]*#endif/static const char *key_pass;/g' certs/extract-cert.c
           sed -i -z 's|#include <linux/mnt_idmapping.h>[[:space:]]*#include "pnode.h"[[:space:]]*#include "internal.h"|#include <linux/mnt_idmapping.h>\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n\n#include "pnode.h"\n#include "internal.h"\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT|g' fs/namespace.c
+          sed -i -z 's|#include <linux/fs_context.h>[[:space:]]*#include <uapi/linux/mount.h>[[:space:]]*#include "internal.h"|#include <linux/fs_context.h>\n#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif // #ifdef CONFIG_KSU_SUSFS\n#include <uapi/linux/mount.h>\n#include "internal.h"\n\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT|g' fs/super.c
 
           touch .scmversion
           make O=out ARCH=arm64 LLVM=1 CC="ccache clang" gki_defconfig
