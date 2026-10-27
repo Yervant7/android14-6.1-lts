@@ -1,4 +1,4 @@
-name: Build GKI Kernel Android 14 6.1 LTS
+name: Build GKI Kernel Android 14 6.1
 
 on:
   workflow_dispatch:
@@ -91,10 +91,10 @@ jobs:
           tar -xzf "${CLANG_TAG}.tar.gz" -C "$CLANG_TAG"
           rm -f "${CLANG_TAG}.tar.gz"
 
-      - name: Git Clone Kernel GKI (android14-6.1-lts)
+      - name: Git Clone Kernel GKI (android14-6.1)
         run: |
           mkdir -p android-kernel
-          git clone https://android.googlesource.com/kernel/common -b android14-6.1-lts --depth=10 android-kernel/common
+          git clone https://android.googlesource.com/kernel/common -b android14-6.1 --depth=10 android-kernel/common
 
       - name: Integrate KernelSU
         if: ${{ github.event.inputs.OPT_KSU != 'false' }}
