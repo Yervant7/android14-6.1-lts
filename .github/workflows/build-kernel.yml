@@ -191,7 +191,7 @@ jobs:
         run: |
           {
             echo "## 🚀 Build Details"
-            echo "- **GKI Base:** Android 14 6.1 LTS"
+            echo "- **GKI Base:** Android 14 6.1"
             echo "- **KernelSU Mode:** \`${{ github.event.inputs.OPT_KSU }}\`"
             echo "- **Clang Version:** \`${{ env.CLANG_VERSION }}\`"
             echo ""
